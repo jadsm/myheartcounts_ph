@@ -1,0 +1,888 @@
+---
+title: "MHQ"
+author: "Niamh Errington"
+date: "`r format(Sys.time(), '%d %B %Y')`" 
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning = FALSE, message=FALSE}
+#libraries
+library(readr)
+library(readxl)
+library(tidyverse)
+library(data.table)
+library(kableExtra)
+library(lubridate)
+library(janitor)
+
+```
+
+```{r, warning = FALSE, message = FALSE}
+
+#Read in data
+allfiles <- list.files("20240901_questionnaire", pattern = "*.csv", full.names = TRUE, recursive = TRUE)
+filenames <- gsub(x = allfiles, pattern = "20240901_questionnaire/|.csv", replacement = "")
+filenames <- gsub(x = filenames, pattern = "-", replacement = "_")
+
+us_cohort <- read_csv("2024_us_cohort.csv")
+
+# Read in files to list of dfs
+df.list <- lapply(allfiles, function(x) read_csv(file = x))
+names(df.list) <- filenames #Add file name 
+
+ExIDs <- select(df.list$ExternalIdentifier_v1, external_identifier, healthCode) %>% unique(.)
+ExIDs$external_identifier <- toupper(ExIDs$external_identifier)
+ExIDsLong <- df.list$ExternalIdentifier_v1
+
+#Remove ID table from list
+df.list$ExternalIdentifier_v1 <- NULL
+
+#Add External ID match
+df.list2 <- lapply(df.list, function(x) left_join(x, ExIDs, by = "healthCode"))
+
+#Separate out list into environment
+list2env(df.list2, environment())
+
+# General function to decode any col based on the provided map
+decoder <- function(code_str, code_map) {
+  # Remove [] and split string by commas
+  codes <- gsub("\\[|\\]", "", code_str)
+  code_list <- strsplit(codes, ",")[[1]]
+  
+  # Trim spaces and decode each number
+  decoded <- sapply(code_list, function(x) {
+    trimmed_code <- trimws(x)
+    # Check if code exists in the map, otherwise return the original code
+    if (trimmed_code %in% names(code_map)) {
+      return(code_map[[trimmed_code]])
+    } else {
+      return(trimmed_code)  # Return original code if not found in the map
+    }
+  })
+  
+  # Return the combined description as a string
+  return(paste(decoded, collapse = ", and "))
+}
+  
+```
+
+# Adequacy of activity mindset measure
+
+unhealthy:	My current level of physical activity is unhealthy.
+
+weight:	My current level of physical activity is helping me achieve or maintain a healthy body weight.
+
+beneficial:	How harmful/beneficial is your current level of physical activity for your health?
+
+disease:	How much does your current level of physical (in-)activity increase or decrease your risk of disease?
+
+muscles:	How much is your current level of physical (in-)activity strengthening or weakening your muscles?
+
+**Tables show value range 1-7 + NA as expected.**
+
+```{r}
+tabyl(Adequacy_of_activity_mindset_measure_v2, unhealthy)
+tabyl(Adequacy_of_activity_mindset_measure_v2, weight)
+tabyl(Adequacy_of_activity_mindset_measure_v2, beneficial)
+tabyl(Adequacy_of_activity_mindset_measure_v2, disease)
+tabyl(Adequacy_of_activity_mindset_measure_v2, muscles)
+  
+
+MindsetAdequacy <- Adequacy_of_activity_mindset_measure_v2 %>%  mutate(unhealthy = dplyr::recode(unhealthy, "[1]" = "Strongly Disagree",
+                                       "[2]" = "Disagree",
+                                       "[3]" = "Somewhat Disagree",
+                                       "[4]" = "Neither agree or disagree",
+                                       "[5]" = "Somewhat Agree",
+                                       "[6]" = "Agree",
+                                       "[7]" = "Strongly Agree") ,
+       weight = dplyr::recode(weight, "[1]" = "Strongly Disagree",
+                                       "[2]" = "Disagree",
+                                       "[3]" = "Somewhat Disagree",
+                                       "[4]" = "Neither agree or disagree",
+                                       "[5]" = "Somewhat Agree",
+                                       "[6]" = "Agree",
+                                       "[7]" = "Strongly Agree"),
+       beneficial = dplyr::recode(beneficial, "[1]" = "Very harmful for my health",
+                                       "[2]" = "Moderately harmful for my health",
+                                       "[3]" = "Slightly harmful for my health",
+                                       "[4]" = "Neither harmful nor beneficial for my health",
+                                       "[5]" = "Moderately beneficial for my health",
+                                       "[6]" = "Very beneficial for my health",
+                                       "[7]" = "Extremely beneficial for my health"),
+       disease = dplyr::recode(disease, "[1]" = "Increases my risk very much",
+                                       "[2]" = "Increases my risk moderately",
+                                       "[3]" = "Increases my risk slightly",
+                                       "[4]" = "Neither increases nor decreases my risk",
+                                       "[5]" = "Decreases my risk slightly",
+                                       "[6]" = "Decreases my risk moderately",
+                                       "[7]" = "Decreases my risk very much"),
+       muscles = dplyr::recode(muscles, "[1]" = "Weakening very much",
+                                       "[2]" = "Weakening moderately",
+                                       "[3]" = "Weakening slightly",
+                                       "[4]" = "Neither strengthening nor weakening",
+                                       "[5]" = "Strengthening slightly",
+                                       "[6]" = "Strengthening moderately",
+                                       "[7]" = "Strengthening very much") )
+
+MindsetAdequacy <- MindsetAdequacy %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(MindsetAdequacy, "MindsetAdequacy.csv")
+
+```
+
+# Vaping & smoking
+
+columns are not the same between v2 & v3. Datasets combined into Smoking dataset
+
+```{r}
+#Bind datasets then dplyr::recode variables
+Smoking <- bind_rows(Vaping_and_smoking_survey_v3, Vaping_and_smoking_survey_v2)
+
+ tobaccoProducts_decode <- c("[1]" = "Manufactured cigarettes",
+                                       "[2]" = "Hand rolled cigarettes",
+                                       "[3]" = "Pipe full of tobacco",
+                                       "[4]" = "Cigars",
+                                       "[5]" = "Water pipe (hookah)",
+                                       "[6]" = "e-cigarettes",
+                                       "[7]" = "Chew tobacco",
+                                       "[8]" = "[8]") #8 not in decoder
+
+Smoking <- Smoking %>% mutate(pastVaping = dplyr::recode(pastVaping, "[1]" = "Yes",
+                                       "[2]" = "No",
+                                       "[3]" = "Don't Know"),
+        pastSmokeless = dplyr::recode(pastSmokeless, "[1]" = "Yes",
+                                       "[2]" = "No",
+                                       "[3]" = "Don't Know"),
+        durationQuitVaping = dplyr::recode(durationQuitVaping, "[1]" = "days",
+                                       "[2]" = "months",
+                                       "[3]" = "years",
+                                       "[4]" = "never",
+                                       "[5]" = "Don't Know"),
+        durationQuitSmoking = dplyr::recode(durationQuitSmoking, "[1]" = "days",
+                                       "[2]" = "months",
+                                       "[3]" = "years",
+                                       "[4]" = "never",
+                                       "[5]" = "Don't Know"),
+        durationQuitSmokeless = dplyr::recode(durationQuitSmokeless, "[1]" = "days",
+                                       "[2]" = "months",
+                                       "[3]" = "years",
+                                       "[4]" = "never",
+                                       "[5]" = "Don't Know"),        
+        currentVaping = dplyr::recode(currentVaping, "[1]" = "daily",
+                                       "[2]" = "less than daily",
+                                       "[3]" = "not at all",
+                                       "[4]" = "don't know"),
+        currentSmoking = dplyr::recode(currentSmoking, "[1]" = "daily",
+                                       "[2]" = "less than daily",
+                                       "[3]" = "not at all",
+                                       "[4]" = "don't know"),
+        currentSmokeless = dplyr::recode(currentSmokeless, "[1]" = "daily",
+                                       "[2]" = "less than daily",
+                                       "[3]" = "not at all",
+                                       "[4]" = "don't know"),        
+        methodQuitVaping = dplyr::recode(methodQuitVaping, "[1]" = "Nicotine replacement product (patch, gum, lozenge, inhaler, nasal spray)",
+                                       "[2]" = "Prescription non-nicotine medications (bupropion SR, varenicline tartrate",
+                                       "[3]" = "Cognitive therapy / counselling",
+                                       "[4]" = "Cold turkey",
+                                       "[5]" = "Smartphone app",
+                                       "[6]" = "Exercise",
+                                       "[7]" = "Other" ),    
+        methodQuitSmoking = dplyr::recode(methodQuitSmoking, "[1]" = "Nicotine replacement product (patch, gum, lozenge, inhaler, nasal spray)",
+                                       "[2]" = "Prescription non-nicotine medications (bupropion SR, varenicline tartrate",
+                                       "[3]" = "Cognitive therapy / counselling",
+                                       "[4]" = "Cold turkey",
+                                       "[5]" = "Smartphone app",
+                                       "[6]" = "Exercise",
+                                       "[7]" = "Other" ),  
+        methodQuitSmokeless = dplyr::recode(methodQuitSmokeless, "[1]" = "Nicotine replacement product (patch, gum, lozenge, inhaler, nasal spray)",
+                                       "[2]" = "Prescription non-nicotine medications (bupropion SR, varenicline tartrate",
+                                       "[3]" = "Cognitive therapy / counselling",
+                                       "[4]" = "Cold turkey",
+                                       "[5]" = "Smartphone app",
+                                       "[6]" = "Exercise",
+                                       "[7]" = "Other",
+                                       "[Other]" = "Other"),          
+                cannabisSmoking = dplyr::recode(cannabisSmoking, "[1]" = "Yes, currently",
+                                       "[2]" = "No, but I have in the past",
+                                       "[3]" = "No, I have never"), 
+                cannabisVaping = dplyr::recode(cannabisVaping, "[1]" = "Yes, currently",
+                                       "[2]" = "No, but I have in the past",
+                                       "[3]" = "No, I have never"),
+                 pastCannabisSmoking = dplyr::recode(pastCannabisSmoking, "[1]" = "< 1 year",
+                                       "[2]" = "1 - 5 years",
+                                       "[3]" = "6 - 10 years",
+                                       "[4]" = "11 - 15 years",
+                                       "[5]" = "16 - 20 years",
+                                       "[6]" = ">= 20 years"),
+                pastCannabisVaping = dplyr::recode(pastCannabisVaping, "[1]" = "< 1 year",
+                                       "[2]" = "1 - 5 years",
+                                       "[3]" = "6 - 10 years",
+                                       "[4]" = "11 - 15 years",
+                                       "[5]" = "16 - 20 years",
+                                       "[6]" = ">= 20 years"),
+               lastCannabisSmoking = dplyr::recode(lastCannabisSmoking, "[1]" = "< 1 week ago",
+                                       "[2]" = "1 week - 1 month ago",
+                                       "[3]" = "1 month - 6 months ago",
+                                       "[4]" = "6 months - 2 years ago",
+                                       "[5]" = "2 years - 5 years ago",
+                                       "[6]" = ">= 5 years ago"),
+                lastCannabisVaping = dplyr::recode(lastCannabisVaping, "[1]" = "< 1 week ago",
+                                       "[2]" = "1 week - 1 month ago",
+                                       "[3]" = "1 month - 6 months ago",
+                                       "[4]" = "6 months - 2 years ago",
+                                       "[5]" = "2 years - 5 years ago",
+                                       "[6]" = ">= 5 years ago")
+                                       )
+
+Smoking$tobaccoProducts <- sapply(Smoking$tobaccoProducts, decoder, code_map = tobaccoProducts_decode)
+
+Smoking$tobaccoProductsEver <- sapply(Smoking$tobaccoProductsEver, decoder, code_map = tobaccoProducts_decode)
+
+#Fix date
+Smoking <- Smoking %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(Smoking, "Smoking.csv")
+
+tabyl(Smoking, pastVaping)
+tabyl(Smoking, currentVaping)
+
+```
+
+# Cardiovascular risk factors
+
+cardiovascular_risk_factors_v1 only contains Allan (7075). Only cardiovascular_risk_factors_SchemaV2_v1 used. 
+
+family_history:	Do you have a family history of early heart disease?
+
+medications_to_treat:	Do you take medications to treat the following risk factors (indicate all that apply)
+
+heart_disease:	Have you been diagnosed with any of the below diseases?
+
+vascular:	Which vascular disease diagnosis have you received?
+
+ethnicity:	Are you Spanish/Hispanic/Lation? Choose the best answer. 
+
+race:	What is your race? Choose one or more races to indicate what you consider yourself to be. 
+
+education:	What is the highest grade in school you finished? Choose the best answer. 
+
+```{r}
+# Define the mapping of codes to descriptions
+heart_disease_map <- c(
+  "1" = "Heart Attack/Myocardial Infarction",
+  "2" = "Heart Bypass Surgery",
+  "3" = "Coronary Blockage/Stenosis",
+  "4" = "Coronary Stent/Angioplasty",
+  "5" = "Angina (heart chest pains)",
+  "6" = "High Coronary Calcium Score",
+  "7" = "Heart Failure or CHF",
+  "8" = "Atrial fibrillation (Afib)",
+  "9" = "Congenital Heart",
+  "10" = "None of the above",
+  "11" = "Pulmonary Hypertension"
+)
+
+vascular_map <- c(
+  "1" = "Stroke",
+  "2" = "Transient Ischemic Attack (TIA)",
+  "3" = "Carotid Artery Blockage/Stenosis",
+  "4" = "Carotid Artery Surgery or Stent",
+  "5" = "Peripheral Vascular Disease (Blockage/Stenosis, Surgery, or Stent)",
+  "6" = "Abdominal Aortic Aneurysm",
+  "7" = "None of the above"
+)
+
+cholesterolmeds_map <- c("1" = "To treat and lower cholesterol",
+                         "2" = "To treat hypertension and lower blood pressure",
+                         "3" = "To treat diabetes/ pre diabetes and lower blood sugar",
+                         "4" = "None of the above")
+
+race_map <- c("1" = "White",
+               "2" = "Black, African-American, or Negro",
+               "3" = "American Indian",
+               "4" = "Alaska Native",
+               "5" = "Asian Indian",
+               "6" = "Chinise",
+               "7" = "Filipino",
+               "8" = "Japanese",
+               "9" = "Korean",
+               "10" = "Vietnamese",
+               "11" = "Pacific Islander",
+               "12" = "Some other race")
+
+RiskFactors <- cardiovascular_risk_factors_SchemaV2_v1
+
+# Decode heart disease column
+RiskFactors$heart_disease <- sapply(RiskFactors$heart_disease, decoder, code_map = heart_disease_map)
+
+# Decode vascular column
+RiskFactors$vascular <- sapply(RiskFactors$vascular, decoder, code_map = vascular_map)
+
+RiskFactors$medications_to_treat <- sapply(RiskFactors$medications_to_treat, decoder, code_map = cholesterolmeds_map)
+
+RiskFactors$race <- sapply(RiskFactors$race, decoder, code_map = race_map)
+
+RiskFactors <- RiskFactors %>% mutate(family_history = dplyr::recode(family_history, "[1]" = "Father or brother",
+                                       "[2]" = "Mother or sister",
+                                       "[3]" = "None of the above",
+                                       "[1,2]" = "Father or brother, and mother or sister"),
+           ethnicity = dplyr::recode(ethnicity, "[1]" = "No, not Spanish/Hispanic/Latino",
+                                       "[2]" = "Yes, Puerto Rican",
+                                       "[3]" = "Yes, Mexican, Mexican American, or Chicano",
+                                       "[4]" = "Yes, Cuban",
+                                       "[5]" = "Yes, other Spanish, Hispanic, Latina"),
+           education = dplyr::recode(education, "[1]" = "Didn't go to school",
+                                       "[2]" = "Grade school",
+                                       "[3]" = "High school diploma",
+                                       "[4]" = "Some college or vocational school or Associate Degree",
+                                       "[5]" = "College graduate or Baccalaureate Degree",
+                                       "[6]" = "Master's Degree",
+                                       "[7]" = "Doctoral Degree (Ph.D., M.D., J.D., etc.) "))
+
+
+RiskFactors <- RiskFactors %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(RiskFactors, "RiskFactors.csv")
+
+```
+
+
+# Adequacy of activity mindset
+
+work:	Do you do regular work?
+
+atwork:	Work Time Activity.
+
+phys_activity:	Leisure Time Activity.
+
+moderate_act:	Overall, how many minutes of moderate activity do you get in a week?
+
+vigorous_act:	Overall, how many minutes of vigorous activity do you get in a week?
+
+sleep_time1:	How much sleep do you usually get at night on weekdays or workdays?
+
+sleep_time:	How much sleep do think you need every night to be rested?  (in hours)
+
+sleep_diagnosis1:	Have you ever been told by a doctor or other health professional that you have a sleep disorder?
+
+sleep_diagnosis2:	Which of the following sleep disorders apply to you? (select all that apply).
+
+```{r}
+sleep_diagnosis2_map <- c("[1]" = "Sleep Apnea (breathing stops at night)",
+                           "[2]" = "Insomnia",
+                           "[3]" = "Circadian Rhythm Disturbance (Advanced/Delayed Sleep Phase, Shift work)",
+                           "[4]" = "Restless Legs Syndrome and/or Periodic Limb Movements",
+                           "[5]" = "Narcolepsy or Cataplexy",
+                           "[6]" = "REM Behavior Disorder (act out dreams in your sleep)",
+                           "[7]" = "Sleepwalking",
+                           "[8]" = "None of the above")
+
+ActivitySleep <- ActivitySleep_v2 %>% mutate(atwork = dplyr::recode(atwork, "[1]" = "I spent most of the day sitting or standing",
+                                       "[2]" = "I spent most of the day walking or using my hands and arms in work that required moderate exertion",
+                                       "[3]" = "I spent most of the day lifting or carrying heavy objects or moving most of my body in some other way",
+                                       "[4]" = "I spent most of the day doing hard physical labor"),
+            phys_activity = dplyr::recode(phys_activity, "[1]" = "I did not do much physical activity",
+                                       "[2]" = "Once or twice a week, I did light activities",
+                                       "[3]" = "About three times a week, I did moderate activities",
+                                       "[4]" = "Almost daily, that is five or more times a week, I did moderate activities",
+                                       "[5]" = "About three times a week, I did vigorous activities",
+                                       "[6]" = "Almost daily, that is, five or more times a week, I did vigorous activities") )
+ActivitySleep$sleep_diagnosis2 <- sapply(ActivitySleep$sleep_diagnosis2, decoder, code_map = sleep_diagnosis2_map)
+
+tabyl(ActivitySleep$atwork)
+tabyl(ActivitySleep$moderate_act)
+tabyl(ActivitySleep$phys_activity)
+tabyl(ActivitySleep$sleep_diagnosis1)
+tabyl(ActivitySleep$sleep_diagnosis2)
+tabyl(ActivitySleep$sleep_time)
+tabyl(ActivitySleep$sleep_time1)
+tabyl(ActivitySleep$vigorous_act)
+tabyl(ActivitySleep$work)
+
+ActivitySleep <- ActivitySleep %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(ActivitySleep, "ActivitySleep.csv" )
+
+```
+
+# Cardiovascular par q quiz
+
+Should all be TRUE/FALSE
+
+heartCondition:	has your doctor ever said that you have a heart condition and that you should only do physical activity recommended by a doctor? 
+
+chestPain:	Do you feel pain in your chest when you do physical activity?
+
+chestPainInLastMonth:	In the past month, have you had chest pain when you were not doing physical activity? 
+
+dizziness:	Do you lose your balanced because of dizziness or do you ever lose consciousness? 
+
+jointProblem:	Do you have a bone or joint problem that could be made worse by a change in your physical activity? 
+
+physicallyCapable:	Do you know of any reason why you should not do physical activity? 
+
+prescriptionDrugs:	Is your doctor currently prescribing drugs (for example water pills) for your blood pressure or heart condition? 
+
+```{r}
+
+`cardiovascular_par_q quiz_v1` <- `cardiovascular_par_q quiz_v1` %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+tabyl(`cardiovascular_par_q quiz_v1`, heartCondition)
+tabyl(`cardiovascular_par_q quiz_v1`, chestPain)
+tabyl(`cardiovascular_par_q quiz_v1`, chestPainInLastMonth)
+tabyl(`cardiovascular_par_q quiz_v1`, dizziness)
+tabyl(`cardiovascular_par_q quiz_v1`, jointProblem)
+tabyl(`cardiovascular_par_q quiz_v1`, physicallyCapable)
+tabyl(`cardiovascular_par_q quiz_v1`, prescriptionDrugs)
+```
+
+# Satisfaction
+
+satisfiedwith_life:	Overall, how satisfied are you with life as a whole these days?
+
+feel_worthwhile1:	Overall, to what extent do you feel the things you do in your life are worthwhile?
+
+feel_worthwhile2:	How about happy?
+
+feel_worthwhile3:	How about worried?
+
+feel_worthwhile4:	How about depressed?
+
+zip:	Please enter the first 3 digits of your zip code.
+
+riskfactors1:	Over the next 10 years how likely do you think it is that you personally will have a heart attack, stroke, or die due to cardiovascular disease? (choose one)
+
+riskfactors2:	Over the next 10 years, compared to others your age and sex, how would you rate your risk of having a heart attack, stroke, or dying due to cardiovascular disease? (choose one)
+
+riskfactors3:	Over your lifetime how likely do you think it is that you personally will have a heart attack, stroke, or die due to cardiovascular disease? (choose one)
+
+riskfactors4:	Over your lifetime, compared to others your age and sex, how would you rate your risk of having a heart attack, stroke, or dying due to cardiovascular disease? (choose one)
+
+
+```{r}
+Satisfaction <- cardiovascular_satisfied_SchemaV3_v1 %>% mutate(riskfactors1 = dplyr::recode(riskfactors1, "[1]" = "Not at all",
+                                       "[2]" = "A little",
+                                       "[3]" = "Moderately",
+                                       "[4]" = "A lot",
+                                       "[5]" = "Extremely" ),
+      riskfactors2 = dplyr::recode(riskfactors2,"[1]" = "Much lower than average",
+                                       "[2]" = "Lower than average",
+                                       "[3]" = "Average",
+                                       "[4]" = "Higher than average",
+                                       "[5]" = "Much higher than average" ),
+      riskfactors3 = dplyr::recode(riskfactors3, "[1]" = "Not at all",
+                                       "[2]" = "A little",
+                                       "[3]" = "Moderately",
+                                       "[4]" = "A lot",
+                                       "[5]" = "Extremely" ),
+      riskfactors4 = dplyr::recode(riskfactors4, "[1]" = "Much lower than average",
+                                       "[2]" = "Lower than average",
+                                       "[3]" = "Average",
+                                       "[4]" = "Higher than average",
+                                       "[5]" = "Much higher than average"  ) )
+tabyl(Satisfaction, riskfactors1)
+tabyl(Satisfaction, riskfactors2)
+tabyl(Satisfaction, riskfactors3)
+tabyl(Satisfaction, riskfactors4)
+
+tabyl(Satisfaction, feel_worthwhile1)
+tabyl(Satisfaction, feel_worthwhile2)
+tabyl(Satisfaction, feel_worthwhile3)
+tabyl(Satisfaction, feel_worthwhile4)
+
+tabyl(Satisfaction, satisfiedwith_life)
+
+Satisfaction <- Satisfaction %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(Satisfaction, "Satisfaction.csv" )
+
+```
+# Illness mindset
+
+body_self_healing_in_many_different_circumstances:	Your body can heal itself on its own in many different circumstances.
+
+chronic_illness_impact:	Chronic illness negatively impacts nearly all parts of life.
+
+chronic_illness_body_meaning:	Having a chronic illness means that your body isn’t doing its job.
+
+chronic_illness_body_coping:	Your body is able to cope with a chronic illness.
+
+chronic_illness_positive_opportunity:	A chronic illness can be an opportunity to make positive life changes.
+
+chronic_illness_management:	A chronic illness is manageable.
+
+chronic_illness_body_betrayal:	If you have a chronic illness, it means your body has betrayed you.
+
+chronic_illness_more_meaning_in_life:	Having a chronic illness allows you to find more meaning in life.
+
+chronic_illness_handling:	A chronic illness is something that can be dealt with.
+
+body_remarkable_self_healing:	In general, your body has remarkable self-healing properties.
+
+chronic_illness_spoil:	Having a chronic illness spoils many parts of life.
+
+chronic_illness_challenge:	Having a chronic illness is a challenge that can make you stronger.
+
+chronic_illness_body_handling:	In general, your body is able to handle a chronic illness.
+
+chronic_illness_runing_life:	A chronic illness ruins most aspects of life.
+
+chronic_illness_body_management:	Your body is designed to deal with and manage chronic illnesses.
+
+chronic_illness_relatively_normal_life:	You can live a relatively normal life with a chronic illness.
+
+chronic_illness_body_failure:	Having a chronic illness means that your body has failed.
+
+chronic_illness_empowering:	Fighting a chronic illness can be empowering.
+
+body_self_healing_from_most_conditions_and_diseases:	Your body is able to heal itself from most conditions and diseases.
+
+chronic_illness_body_blame:	Your body is to blame if you have a chronic illness.
+
+```{r}
+recode_logic <- function(x) {
+  case_when(
+x == "[1]" ~ "Strongly Disagree",
+                                     x ==   "[2]" ~ "Disagree",
+                                     x ==  "[3]" ~ "Somewhat Disagree",
+                                     x ==   "[4]" ~ "Somewhat Agree",
+                                     x ==   "[5]" ~ "Agree",
+                                     x ==   "[6]" ~ "Strongly Agree",
+    TRUE ~ NA_character_
+  )
+}
+
+# Mutate variables with dplyr::recode and add suffix 'decoded'
+Illnessmindset <- Illness_mindset_inventory_v2 %>%
+  mutate(across(c(body_self_healing_in_many_different_circumstances,
+                  chronic_illness_impact,
+                  chronic_illness_body_meaning,
+                  chronic_illness_body_coping,
+                  chronic_illness_positive_opportunity,
+                  chronic_illness_management,
+                  chronic_illness_body_betrayal,
+                  chronic_illness_more_meaning_in_life,
+                  chronic_illness_handling,
+                  body_remarkable_self_healing,
+                  chronic_illness_spoil,
+                  chronic_illness_challenge,
+                  chronic_illness_body_handling,
+                  chronic_illness_runing_life,
+                  chronic_illness_body_management,
+                  chronic_illness_relatively_normal_life,
+                  chronic_illness_body_failure,
+                  chronic_illness_empowering,
+                  body_self_healing_from_most_conditions_and_diseases,
+                  chronic_illness_body_blame), recode_logic))
+
+
+tabyl(Illnessmindset$body_self_healing_in_many_different_circumstances)
+tabyl(Illnessmindset$chronic_illness_impact)
+tabyl(Illnessmindset$chronic_illness_body_meaning)
+tabyl(Illnessmindset$chronic_illness_body_coping)
+tabyl(Illnessmindset$chronic_illness_positive_opportunity)
+tabyl(Illnessmindset$chronic_illness_management)
+tabyl(Illnessmindset$chronic_illness_body_betrayal)
+tabyl(Illnessmindset$chronic_illness_more_meaning_in_life)
+tabyl(Illnessmindset$chronic_illness_handling)
+tabyl(Illnessmindset$body_remarkable_self_healing)
+tabyl(Illnessmindset$chronic_illness_spoil)
+tabyl(Illnessmindset$chronic_illness_challenge)
+tabyl(Illnessmindset$chronic_illness_body_handling)
+tabyl(Illnessmindset$chronic_illness_runing_life)
+tabyl(Illnessmindset$chronic_illness_body_management)
+tabyl(Illnessmindset$chronic_illness_relatively_normal_life)
+tabyl(Illnessmindset$chronic_illness_body_failure)
+tabyl(Illnessmindset$chronic_illness_empowering)
+tabyl(Illnessmindset$body_self_healing_from_most_conditions_and_diseases)
+tabyl(Illnessmindset$chronic_illness_body_blame)
+
+Illnessmindset <- Illnessmindset %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(Illnessmindset, "Illnessmindset.csv" )
+```
+
+
+```{r}
+Exerciseprocess <- Exercise_process_mindset_measure_v2 %>% mutate(easy = dplyr::recode(easy, "[1]" = "Very difficult",
+                                       "[2]" = "Somewhat difficult",
+                                        "[3]" = "Somewhat easy",
+                                       "[4]" = "Very easy" ),
+      pleasurable = dplyr::recode(pleasurable,"[1]" = "Very unpleasant",
+                                       "[2]" = "Somewhat unpleasant",
+                                       "[3]" = "Somewhat pleasurable",
+                                       "[4]" = "Very pleasurable" ),
+      relaxing = dplyr::recode(relaxing, "[1]" = "Very stressful",
+                                       "[2]" = "Somewhat stressful",
+                                       "[3]" = "Somewhat relaxing",
+                                       "[4]" = "Very relaxing" ),
+      convenient = dplyr::recode(convenient, "[1]" = "Very inconvenient",
+                                       "[2]" = "Somewhat inconvenient",
+                                       "[3]" = "Somewhat convenient",
+                                       "[4]" = "Very convenient"  ),
+      fun = dplyr::recode(fun, "[1]" = "Very boring",
+                                       "[2]" = "Somewhat boring",
+                                       "[3]" = "Somewhat fun",
+                                       "[4]" = "Very fun"  ),
+      social = dplyr::recode(social, "[1]" = "Very lonely",
+                                       "[2]" = "Somewhat lonely",
+                                       "[3]" = "Somewhat social",
+                                       "[4]" = "Very social"  ),
+      indulgent = dplyr::recode(indulgent, "[1]" = "Very depriving",
+                                       "[2]" = "Somewhat depriving",
+                                       "[3]" = "Somewhat indulgent",
+                                       "[4]" = "Very indulgent"  ))
+
+Exerciseprocess <- Exerciseprocess %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+#write_csv(Exerciseprocess, "Exerciseprocess.csv" )
+
+```
+
+# 23 and Me (Allan only in UK cohort, ignore)
+
+```{r}
+table(cardiovascular_23andmeTask_v1$healthCode)
+cardiovascular_23andmeTask_v1 <- cardiovascular_23andmeTask_v1 %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+cardio23andme_long <- cardiovascular_23andmeTask_v1 %>% select(healthCode, external_identifier, dayInStudy, createdOn, `23andMeUserId.profileId`, `23andMeUserId.userId`) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+
+```
+
+# cardiovascular_2_APHHeartAge_7259AC18_D711_47A6_ADBD_6CFCECDED1DF_v1 (Allan only) - unreleased q?
+
+# Daily check
+
+cardiovascular_daily_check_v1 - Allan only - unreleased version?
+
+```{r}
+dim(cardiovascular_daily_check_v1)
+table(cardiovascular_daily_check_v1$external_identifier)
+dim(cardiovascular_daily_check_v2)
+table(cardiovascular_daily_check_v2$external_identifier)
+
+dailycheck <- cardiovascular_daily_check_v2 %>% mutate(phone_on_user = dplyr::recode(phone_on_user, "[1]" = "All day and all night",
+                                       "[2]" = "All day but not at night",
+                                       "[3]" = "About half the time",
+                                       "[4]" = "Rarely if at all" ),
+      activity1_type = dplyr::recode(activity1_type,"[1]" = "Walking",
+                                       "[2]" = "Jogging",
+                                       "[3]" = "Cycling",
+                                       "[4]" = "Tennis or other racquet sport",
+                              "[5]" = "Soccer, basketball, or other team sport",
+                              "[6]" = "Weight lifting",
+                              "[7]" = "Swimming"), 
+      activity1_intensity = dplyr::recode(activity1_intensity, "[1]" = "Light",
+                                       "[2]" = "Moderate",
+                                       "[3]" = "Vigorous" ),
+      activity2_type = dplyr::recode(activity2_type,"[1]" = "Walking",
+                                       "[2]" = "Jogging",
+                                       "[3]" = "Cycling",
+                                       "[4]" = "Tennis or other racquet sport",
+                              "[5]" = "Soccer, basketball, or other team sport",
+                              "[6]" = "Weight lifting",
+                              "[7]" = "Swimming"), 
+            activity2_intensity = dplyr::recode(activity2_intensity, "[1]" = "Light",
+                                       "[2]" = "Moderate",
+                                       "[3]" = "Vigorous") )
+
+dailycheck <- dailycheck %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+```
+
+# Diet
+
+cardiovascular_Diet_survey_cardio_v1 - Allan only
+
+cardiovascular_Diet_survey_cardio_SchemaV2_v1 - Allan & SPVDU07101 only
+
+fruit:	How many cups of fruit do you eat in an average day?
+
+vegetable:	How many cups of vegetables do you eat in an average day?
+
+fish:	How many servings of fish do you eat on an average week?
+
+grains:	How many servings of whole grains do you eat on an average day?
+
+sugar_drinks:	How many beverages with added sugar do you drink every week?
+
+sodium:	Select the statements that apply to you: 1=I avoid eating prepackaged and processed foods.; 2=I avoid eating out, but when I do, I seek out low-sodium options.; 3=I avoid salt when I'm cooking at home
+
+decoder missing for alcohol
+
+```{r}
+sodium_map <- c("[1]" = "I avoid eating prepackaged and processed foods.",
+                "[2]" = "I avoid eating out, but when I do, I seek out low-sodium options.",
+                "[3]" = "I avoid salt when I'm cooking at home",
+                "[4]" = "[]")
+
+Diet <- Diet_survey_cardio_SchemaV2_v2 
+
+Diet$sodium <- sapply(Diet$sodium, decoder, code_map = sodium_map)
+
+Diet <- Diet %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+
+```
+
+# Non identifiable demo (v3)
+
+```{r}
+table(NonIdentifiableDemographicsTask_v3$external_identifier)
+
+#Check empty cols: all json are empty
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientBloodType))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientBiologicalSex))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientCurrentAge))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientFitzpatrickSkinType))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientGoSleepTime))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientHeightInches))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientWakeUpTime))
+table(is.na(NonIdentifiableDemographicsTask_v3$NonIdentifiableDemographics.json.patientWeightPounds))
+
+NonIdentifiableDemographicsTask_v3 <- NonIdentifiableDemographicsTask_v3 %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+```
+
+```{r}
+cardiovascular_ABTestResults_v1 <- cardiovascular_ABTestResults_v1 %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01"))
+```
+
+Welcome and congratulations on being an integral part of the MyHeart Counts study of cardiovascular health. Your heart counts!
+
+device: Which of the following devices do you plan to have on you during the next 7 days to help monitor your regular physical activity and sleep through your iPhone’s Health app?
+
+labwork: After 7 days, you will be asked to calculate your heart risk score, which requires entering your cholesterol blood values and blood pressure. Will you have those data in the next 7 days?
+
+1=iPhone; 2=Activity band or pedometer; 3=Smartwatch / Apple Watch
+1=I currently have this information; 2=I will try to get this information during the next week
+
+```{r}
+device_map <- c("[1]" = "iPhone",
+                "[2]" = "Activity band or pedometer",
+                "[3]" = "Smartwatch / Apple Watch")
+
+cardiovascular_day_one_v1$device <- sapply(cardiovascular_day_one_v1$device, decoder, code_map = device_map)
+
+cardiovascular_day_one_v1 <- cardiovascular_day_one_v1  %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01")) %>%
+mutate(labwork = dplyr::recode(labwork,"[1]" = "I currently have this information",
+                                       "[2]" = "I will try to get this information during the next week") ) %>%   select(healthCode, external_identifier, dayInStudy, createdOn,  device, labwork)
+
+```
+
+
+```{r}
+HeartRiskAge <- cardiovascular_heart_risk_and_age_v1 %>% mutate(createdOn = as.POSIXct(createdOn/1000, origin="1970-01-01")) %>% select(healthCode, external_identifier, dayInStudy, createdOn, heartAgeDataAge, heartAgeDataBloodGlucose, heartAgeDataBloodGlucose_unit, heartAgeDataDiabetes, heartAgeDataGender, heartAgeDataEthnicity, heartAgeDataHdl, heartAgeDataHdl_unit, heartAgeDataHypertension, heartAgeDataLdl, heartAgeDataLdl_unit, smokingHistory, heartAgeDataSystolicBloodPressure,heartAgeDataSystolicBloodPressure_unit, heartAgeDataDiastolicBloodPressure,heartAgeDataDiastolicBloodPressure_unit, heartAgeDataTotalCholesterol, heartAgeDataTotalCholesterol_unit) %>% mutate(across(everything(), ~ str_remove_all(., '"'))) %>% mutate(heartAgeDataEthnicity = dplyr::recode(heartAgeDataEthnicity, "[Asian]" = "Asian",
+                                       "[Other]" = "Other",
+                                       "[White]" = "White",
+                                       "[Black]" = "Black",
+                                       "[Hispanic]" = "Hispanic",
+                                      "[Pacific Islander]" = "Pacific Islander" ),
+      heartAgeDataGender = dplyr::recode(heartAgeDataGender,"[HKBiologicalSexFemale]" = "HKBiologicalSexFemale",
+                                       "[HKBiologicalSexMale]" = "HKBiologicalSexMale") )
+
+HeartRiskAge_long <- HeartRiskAge %>%
+  mutate(across(where(is.numeric), ~as.character(.x)))  %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+```
+
+
+Make long format csv with all qs.
+
+```{r}
+Smoking_long <- Smoking %>% select(-rawData, -rawMetadata, -ROW_ID, -ROW_VERSION, -recordId, -appVersion, -phoneInfo, -uploadDate, -externalId, -dataGroups, -createdOnTimeZone, -userSharingScope, -validationErrors, -substudyMemberships)#
+Smoking_long <- Smoking_long  %>%
+  mutate(across(where(is.numeric), ~as.character(.x)))  %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+Satisfaction_long <- Satisfaction %>% select(healthCode, external_identifier, dayInStudy, createdOn, feel_worthwhile1, feel_worthwhile2, feel_worthwhile3, feel_worthwhile4, riskfactors1, riskfactors2, riskfactors3, riskfactors4, satisfiedwith_life)  %>%
+  mutate(across(where(is.numeric), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+ActivitySleep_long <- ActivitySleep %>% select(healthCode, external_identifier, dayInStudy, createdOn, atwork, moderate_act, phys_activity, sleep_diagnosis1, sleep_diagnosis2, sleep_time, sleep_time1, vigorous_act, work)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x)))  %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+Illnessmindset_long <- Illnessmindset %>% select(healthCode, external_identifier, dayInStudy, createdOn, body_self_healing_in_many_different_circumstances,  
+chronic_illness_impact ,                            
+chronic_illness_body_meaning,                       
+chronic_illness_body_coping,                        
+chronic_illness_positive_opportunity,               
+chronic_illness_management,                         
+chronic_illness_body_betrayal,                      
+chronic_illness_more_meaning_in_life,               
+chronic_illness_handling,                           
+body_remarkable_self_healing,                       
+chronic_illness_spoil,                              
+chronic_illness_challenge,                          
+chronic_illness_body_handling,                      
+chronic_illness_runing_life,                        
+chronic_illness_body_management,                    
+chronic_illness_relatively_normal_life,             
+chronic_illness_body_failure,                       
+chronic_illness_empowering,                         
+body_self_healing_from_most_conditions_and_diseases,
+chronic_illness_body_blame) %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+Exerciseprocess_long <- Exerciseprocess %>% select(healthCode, external_identifier, dayInStudy, createdOn, easy, pleasurable, relaxing, convenient, fun, social, indulgent)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+cardioquiz_long <- `cardiovascular_par_q quiz_v1` %>% select (healthCode, external_identifier, dayInStudy, createdOn, chestPain, chestPainInLastMonth, dizziness, heartCondition, jointProblem, physicallyCapable, prescriptionDrugs)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+dailycheck_long <- dailycheck %>% select (healthCode, external_identifier, dayInStudy, createdOn, activity1_intensity, activity1_option, activity1_time, activity1_type, activity2_intensity, activity2_option, activity2_time, activity2_type, phone_on_user, sleep_time, happiness)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+MindsetAdequacy_long <- MindsetAdequacy %>% select(healthCode, external_identifier, dayInStudy, createdOn, unhealthy, weight, beneficial, disease, muscles)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+#Missing wake up and go to sleep time
+Demolong <- NonIdentifiableDemographicsTask_v3 %>%  select(healthCode, external_identifier, dayInStudy, createdOn, NonIdentifiableDemographics.patientWeightPounds, NonIdentifiableDemographics.patientBiologicalSex, NonIdentifiableDemographics.patientBloodType, NonIdentifiableDemographics.patientFitzpatrickSkinType, NonIdentifiableDemographics.patientHeightInches,  NonIdentifiableDemographics.patientCurrentAge)  %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+Diet_long <- Diet %>% select(healthCode, external_identifier, dayInStudy, createdOn, fish, fruit, grains, sodium, sugar_drinks, vegetable, alcohol) %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+ABresults <- cardiovascular_ABTestResults_v1 %>% select(healthCode, external_identifier, dayInStudy, createdOn, ABTestResult.test_name, ABTestResult.variable_value, ABTestResult.days_in_study)%>%  mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+RegionLong <- cardiovascular_regionInformation_v1 %>% select(healthCode, external_identifier, dayInStudy, createdOn,regionInformation.countryCode) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question") 
+
+DayOne <- cardiovascular_day_one_v1  %>%  mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question") 
+
+RiskFactors_long <- RiskFactors  %>% dplyr::select(healthCode, external_identifier, dayInStudy, createdOn, family_history, medications_to_treat, heart_disease, vascular, ethnicity, race, education) %>%   mutate(across(where(is.numeric), ~as.character(.x))) %>%
+  mutate(across(where(is.logical), ~as.character(.x))) %>% pivot_longer(cols =!c(healthCode, external_identifier, dayInStudy, createdOn), names_to = "Question")
+
+MHQ <- rbind(Smoking_long, Satisfaction_long, ActivitySleep_long, Illnessmindset_long, RiskFactors_long, Exerciseprocess_long, cardioquiz_long, MindsetAdequacy_long, cardio23andme_long, Demolong, Diet_long, dailycheck_long, ABresults, HeartRiskAge_long, DayOne, RegionLong) %>% mutate(value = dplyr::recode(value, "[Other]" = "Other", "[\"Other\"]" = "Other")) %>% mutate(value = na_if(value, "[]"))
+
+#table(MHQ$Question)
+
+#table(MHQ$value) 
+
+MHQ <- MHQ %>% filter(!is.na(value))
+
+undone <- MHQ %>% filter(grepl('\\[', value))
+table(undone$value, undone$Question)
+
+write_csv(MHQ, "/Users/nerringt/Library/CloudStorage/OneDrive-ImperialCollegeLondon/MHC_sep24/MHQ_long_sep24.csv" )
+
+```
+
+
+
+
+
+
+
+
+
+
